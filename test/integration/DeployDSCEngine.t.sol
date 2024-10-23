@@ -7,7 +7,7 @@ import {DecentralizedStableCoin} from "src/DecentralizedStableCoin.sol";
 import {DSCEngine} from "src/DSCEngine.sol";
 import {HelperConfig} from "script/HelperConfig.s.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
-import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import {MockV3Aggregator} from "test/mocks/MockV3Aggregator.sol";
 
 contract DeployDSCEngine is Test {
     DeployDSC deployer;
@@ -22,8 +22,8 @@ contract DeployDSCEngine is Test {
     address public LIQUIDATOR = makeAddr("LIQUIDATOR");
     uint256 public constant AMOUNT_COLLATERAL = 10 ether;
     uint256 public constant AMOUNT_REDEEMED_COLLATERAL = 2 ether;
-    uint256 public constant AMOUNT_DSC_MINTED = 5;
-    uint256 public constant AMOUNT_DSC_TO_BURN = 1;
+    uint256 public constant AMOUNT_DSC_MINTED = 100 ether;
+    uint256 public constant AMOUNT_DSC_TO_BURN = 50 ether;
     uint256 public constant STARTING_ERC20_BALANCE = 10 ether;
     uint256 private constant PRECISION = 1e18;
 
@@ -59,6 +59,7 @@ contract DeployDSCEngine is Test {
         (ethUsdPriceFeed, btcUsdPriceFeed, weth,,) = config.activeNetworkConfig();
 
         ERC20Mock(weth).mint(USER, STARTING_ERC20_BALANCE);
+        ERC20Mock(weth).mint(LIQUIDATOR, STARTING_ERC20_BALANCE);
     }
 
     /*===============================================
@@ -156,8 +157,8 @@ contract DeployDSCEngine is Test {
                      Burn DSC          
     ===============================================*/
     function testBurnDscIsSuccessful() public depositCollateral mintDsc {
-        uint256 expectedDscAmount = 4;
-        uint256 dscToBurn = 1;
+        uint256 dscToBurn = 10 ether;
+        uint256 expectedDscAmount = AMOUNT_DSC_MINTED - dscToBurn;
 
         vm.startPrank(USER);
         /*
@@ -206,6 +207,37 @@ contract DeployDSCEngine is Test {
         vm.expectRevert(DSCEngine.DSCEngine__HealthFactorOk.selector);
         engine.liquidate(weth, USER, AMOUNT_COLLATERAL);
         vm.stopPrank();
+    }
+
+    function testSuccessfulLiquidation() public depositCollateral mintDsc {
+        // Init Liquidator
+        vm.startPrank(LIQUIDATOR);
+        ERC20Mock(weth).approve(address(engine), AMOUNT_COLLATERAL);
+        engine.depositCollateralAndMintDsc(weth, AMOUNT_COLLATERAL, AMOUNT_DSC_MINTED);
+        vm.stopPrank();
+        // Deploy and set up mock aggregator with an initial price
+        MockV3Aggregator mockAggregator = MockV3Aggregator(ethUsdPriceFeed); // 200 * 10^8
+        mockAggregator.updateAnswer(20e8);
+        // Price of the collateral drops, decreasing the health factor
+        uint256 debtToCover = 5 ether;
+
+        // Now LIQUIDATOR attempts to liquidate USER
+        vm.startPrank(LIQUIDATOR);
+        dsc.approve(address(engine), debtToCover);
+        engine.liquidate(weth, USER, debtToCover);
+        vm.stopPrank();
+
+        // Assertions
+        (uint256 totalDscMinted,) = engine.getAccountInformation(USER);
+        uint256 liquidatedCollateral = engine.getTokenAmountFromUsd(weth, debtToCover);
+        // Check the user's DSC debt was reduced
+        assertEq(totalDscMinted, AMOUNT_DSC_MINTED - debtToCover);
+        // Check the collateral was transferred
+        assertEq(
+            ERC20Mock(weth).balanceOf(LIQUIDATOR),
+            liquidatedCollateral
+                + (liquidatedCollateral * engine.getLiquidationBonus()) / engine.getLiquidationPrecision()
+        );
     }
 
     /*===============================================

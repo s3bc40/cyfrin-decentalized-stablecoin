@@ -52,7 +52,7 @@ contract DSCEngine is ReentrancyGuard {
     uint256 private constant LIQUIDATION_THRESHOLD = 50; // 200% overcollateralized
     uint256 private constant LIQUIDATION_PRECISION = 100;
     uint256 private constant LIQUIDATION_BONUS = 10; // 10% bonus
-    uint256 private constant MIN_HEALTH_FACTOR = 1;
+    uint256 private constant MIN_HEALTH_FACTOR = 1e18;
 
     mapping(address token => address priceFeed) private s_priceFeeds; // tokenToPriceFeed
     mapping(address user => mapping(address token => uint256 amount)) private s_collateralDeposited;
@@ -222,7 +222,7 @@ contract DSCEngine is ReentrancyGuard {
     */
     function liquidate(address collateral, address user, uint256 debToCover) external {
         uint256 startingUserHealthFactor = _healthFactor(user);
-        if (startingUserHealthFactor >= MIN_HEALTH_FACTOR) {
+        if (startingUserHealthFactor > MIN_HEALTH_FACTOR) {
             revert DSCEngine__HealthFactorOk();
         }
         /* 
@@ -242,6 +242,7 @@ contract DSCEngine is ReentrancyGuard {
         // burn the debt
         _burnDsc(user, msg.sender, debToCover);
         uint256 endingUserHealthFactor = _healthFactor(user);
+
         if (endingUserHealthFactor <= startingUserHealthFactor) {
             revert DSCEngine__HealthFactorNotImproved();
         }
@@ -374,5 +375,13 @@ contract DSCEngine is ReentrancyGuard {
 
     function getMinHealthFactor() external pure returns (uint256) {
         return MIN_HEALTH_FACTOR;
+    }
+
+    function getLiquidationBonus() external pure returns (uint256) {
+        return LIQUIDATION_BONUS;
+    }
+
+    function getLiquidationPrecision() external pure returns (uint256) {
+        return LIQUIDATION_PRECISION;
     }
 }
