@@ -7,6 +7,7 @@ import {DecentralizedStableCoin} from "src/DecentralizedStableCoin.sol";
 import {DSCEngine} from "src/DSCEngine.sol";
 import {HelperConfig} from "script/HelperConfig.s.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 
 contract DeployDSCEngine is Test {
     DeployDSC deployer;
@@ -18,11 +19,13 @@ contract DeployDSCEngine is Test {
     address btcUsdPriceFeed;
 
     address public USER = makeAddr("USER");
+    address public LIQUIDATOR = makeAddr("LIQUIDATOR");
     uint256 public constant AMOUNT_COLLATERAL = 10 ether;
     uint256 public constant AMOUNT_REDEEMED_COLLATERAL = 2 ether;
-    uint256 public constant AMOUNT_DSC_MINTED = 2;
+    uint256 public constant AMOUNT_DSC_MINTED = 5;
     uint256 public constant AMOUNT_DSC_TO_BURN = 1;
     uint256 public constant STARTING_ERC20_BALANCE = 10 ether;
+    uint256 private constant PRECISION = 1e18;
 
     modifier depositCollateral() {
         vm.startPrank(USER);
@@ -123,10 +126,10 @@ contract DeployDSCEngine is Test {
     /*===============================================
                      Health Factor         
     ===============================================*/
-    function testHealthFactorWithNoCollateralDepositedShouldBeZero() public {
+    function testHealthFactorWithNoDscMinted() public depositCollateral {
         vm.startPrank(USER);
         uint256 healthFactor = engine.getHealthFactor(USER);
-        assertEq(healthFactor, 0);
+        assertEq(healthFactor, engine.getMinHealthFactor());
         vm.stopPrank();
     }
 
@@ -152,22 +155,8 @@ contract DeployDSCEngine is Test {
     /*===============================================
                      Burn DSC          
     ===============================================*/
-    function testBurnDscRevertIfHealthFactorBroken() public depositCollateral mintDsc {
-        uint256 expectedHealthFactor = 0;
-
-        vm.startPrank(USER);
-        /*
-            Need to approve DSCEngine to spend DSC on behalf of USER
-            from DSC
-        */
-        dsc.approve(address(engine), AMOUNT_DSC_MINTED);
-        vm.expectRevert(abi.encodeWithSelector(DSCEngine.DSCEngine__BreaksHealthFactor.selector, expectedHealthFactor));
-        engine.burnDsc(AMOUNT_DSC_MINTED);
-        vm.stopPrank();
-    }
-
     function testBurnDscIsSuccessful() public depositCollateral mintDsc {
-        uint256 expectedDscAmount = 1;
+        uint256 expectedDscAmount = 4;
         uint256 dscToBurn = 1;
 
         vm.startPrank(USER);
@@ -217,5 +206,44 @@ contract DeployDSCEngine is Test {
         vm.expectRevert(DSCEngine.DSCEngine__HealthFactorOk.selector);
         engine.liquidate(weth, USER, AMOUNT_COLLATERAL);
         vm.stopPrank();
+    }
+
+    /*===============================================
+                    Deposit and Mint          
+    ===============================================*/
+    function testDepositCollateralAndMintDscWithEvent() public {
+        vm.startPrank(USER);
+        ERC20Mock(weth).approve(address(engine), AMOUNT_COLLATERAL);
+        engine.depositCollateralAndMintDsc(weth, AMOUNT_COLLATERAL, AMOUNT_DSC_MINTED);
+        vm.stopPrank();
+
+        (uint256 totalDscMinted, uint256 collateralValueInUsd) = engine.getAccountInformation(USER);
+        uint256 expectedDepositAmount = engine.getTokenAmountFromUsd(weth, collateralValueInUsd);
+        assertEq(totalDscMinted, AMOUNT_DSC_MINTED);
+        assertEq(AMOUNT_COLLATERAL, expectedDepositAmount);
+    }
+
+    /*===============================================
+                Redeem Collateral For Dsc      
+    ===============================================*/
+    function testRedeemCollateralForDsc() public depositCollateral mintDsc {
+        vm.startPrank(USER);
+        dsc.approve(address(engine), AMOUNT_DSC_MINTED);
+        engine.redeemCollateralForDsc(weth, AMOUNT_COLLATERAL, AMOUNT_DSC_MINTED);
+        vm.stopPrank();
+
+        (uint256 totalDscMinted, uint256 collateralValueInUsd) = engine.getAccountInformation(USER);
+        uint256 expectedDepositAmount = engine.getTokenAmountFromUsd(weth, collateralValueInUsd);
+        assertEq(totalDscMinted, 0);
+        assertEq(expectedDepositAmount, 0);
+    }
+
+    /*===============================================
+                Account Collateral Value          
+    ===============================================*/
+    function testAccountCollateralValue() public depositCollateral mintDsc {
+        (uint256 totalCollateralValueInUsd) = engine.getAccountCollateralValueInUsd(USER);
+        uint256 expectedDepositAmount = engine.getTokenAmountFromUsd(weth, totalCollateralValueInUsd);
+        assertEq(expectedDepositAmount, AMOUNT_COLLATERAL);
     }
 }

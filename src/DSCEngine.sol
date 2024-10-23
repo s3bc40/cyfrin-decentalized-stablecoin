@@ -248,8 +248,6 @@ contract DSCEngine is ReentrancyGuard {
         _revertIfHealthFactorIsBroken(msg.sender);
     }
 
-    function getHealthFactor() external view {}
-
     /*===============================================
             Private and Internal View Functions          
     ===============================================*/
@@ -300,7 +298,7 @@ contract DSCEngine is ReentrancyGuard {
         // We can't check health factor for a user if they don't have any DSC
         // We have to avoid dividing by 0
         if (totalDscMinted == 0) {
-            return 0;
+            return MIN_HEALTH_FACTOR;
         }
         uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
         /**
@@ -372,5 +370,9 @@ contract DSCEngine is ReentrancyGuard {
 
     function getHealthFactor(address user) external view returns (uint256) {
         return _healthFactor(user);
+    }
+
+    function getMinHealthFactor() external pure returns (uint256) {
+        return MIN_HEALTH_FACTOR;
     }
 }
