@@ -56,7 +56,7 @@ contract DSCEngine is ReentrancyGuard {
 
     mapping(address token => address priceFeed) private s_priceFeeds; // tokenToPriceFeed
     mapping(address user => mapping(address token => uint256 amount)) private s_collateralDeposited;
-    mapping(address user => uint256 amountDscMinted) s_DSCMinted;
+    mapping(address user => uint256 amountDscMinted) private s_DSCMinted;
 
     address[] private s_collateralTokens;
 
@@ -222,7 +222,7 @@ contract DSCEngine is ReentrancyGuard {
     */
     function liquidate(address collateral, address user, uint256 debToCover) external {
         uint256 startingUserHealthFactor = _healthFactor(user);
-        if (startingUserHealthFactor < MIN_HEALTH_FACTOR) {
+        if (startingUserHealthFactor >= MIN_HEALTH_FACTOR) {
             revert DSCEngine__HealthFactorOk();
         }
         /* 
@@ -272,10 +272,10 @@ contract DSCEngine is ReentrancyGuard {
     {
         // Checks
         // Effects
-        s_collateralDeposited[from][tokenCollateralAddress] += amountCollateral;
+        s_collateralDeposited[from][tokenCollateralAddress] -= amountCollateral;
         emit CollateralRedeemed(from, to, tokenCollateralAddress, amountCollateral);
         // Interactions
-        bool success = IERC20(tokenCollateralAddress).transferFrom(msg.sender, address(this), amountCollateral);
+        bool success = IERC20(tokenCollateralAddress).transfer(to, amountCollateral);
         if (!success) {
             revert DSCEngine__TransferFailed();
         }
@@ -297,6 +297,11 @@ contract DSCEngine is ReentrancyGuard {
      */
     function _healthFactor(address user) private view returns (uint256) {
         (uint256 totalDscMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
+        // We can't check health factor for a user if they don't have any DSC
+        // We have to avoid dividing by 0
+        if (totalDscMinted == 0) {
+            return 0;
+        }
         uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
         /**
          * An account's Health Factor will be a bit more complex to consider than simply collateralValueInUsd / totalDscMinted.
@@ -307,7 +312,7 @@ contract DSCEngine is ReentrancyGuard {
 
         // $150 ETH / 100 DSC = 1.5
         // 150 * 50 = 7500 / 100 = 75 / 100 DSC = 0.75 < 1
-        return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted; // case where totalDscMinted == 0 ?
+        return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted; // case where totalDscMinted == 0 ? YES that's a bug
     }
 
     function _revertIfHealthFactorIsBroken(address user) internal view {
@@ -327,7 +332,7 @@ contract DSCEngine is ReentrancyGuard {
         // the usdAmountInWei(1000) / ETH price(2000)
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
         (, int256 price,,,) = priceFeed.latestRoundData();
-        // 1e36 / 1e18 = 1e18: unit
+        // 1e36 / 1e18 = 1e18: unitq
         return (usdAmountInWei * PRECISION) / (uint256(price) * ADDITONNAL_FEED_PRECISION);
     }
 
@@ -363,5 +368,9 @@ contract DSCEngine is ReentrancyGuard {
         returns (uint256 totalDscMinted, uint256 collateralValueInUsd)
     {
         (totalDscMinted, collateralValueInUsd) = _getAccountInformation(user);
+    }
+
+    function getHealthFactor(address user) external view returns (uint256) {
+        return _healthFactor(user);
     }
 }

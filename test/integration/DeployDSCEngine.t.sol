@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, console} from "forge-std/Test.sol";
 import {DeployDSC} from "script/DeployDSC.s.sol";
 import {DecentralizedStableCoin} from "src/DecentralizedStableCoin.sol";
 import {DSCEngine} from "src/DSCEngine.sol";
@@ -19,7 +19,36 @@ contract DeployDSCEngine is Test {
 
     address public USER = makeAddr("USER");
     uint256 public constant AMOUNT_COLLATERAL = 10 ether;
+    uint256 public constant AMOUNT_REDEEMED_COLLATERAL = 2 ether;
+    uint256 public constant AMOUNT_DSC_MINTED = 2;
+    uint256 public constant AMOUNT_DSC_TO_BURN = 1;
     uint256 public constant STARTING_ERC20_BALANCE = 10 ether;
+
+    modifier depositCollateral() {
+        vm.startPrank(USER);
+        ERC20Mock(weth).approve(address(engine), AMOUNT_COLLATERAL);
+        engine.depositCollateral(weth, AMOUNT_COLLATERAL);
+        vm.stopPrank();
+        _;
+    }
+
+    modifier mintDsc() {
+        vm.prank(USER);
+        engine.mintDsc(AMOUNT_DSC_MINTED);
+        _;
+    }
+
+    modifier burnDsc() {
+        vm.startPrank(USER);
+        /*
+            Need to approve DSCEngine to spend DSC on behalf of USER
+            from DSC
+        */
+        dsc.approve(address(engine), AMOUNT_DSC_TO_BURN);
+        engine.burnDsc(AMOUNT_DSC_TO_BURN);
+        vm.stopPrank();
+        _;
+    }
 
     function setUp() public {
         deployer = new DeployDSC();
@@ -81,14 +110,6 @@ contract DeployDSCEngine is Test {
         vm.stopPrank();
     }
 
-    modifier depositCollateral() {
-        vm.startPrank(USER);
-        ERC20Mock(weth).approve(address(engine), AMOUNT_COLLATERAL);
-        engine.depositCollateral(weth, AMOUNT_COLLATERAL);
-        vm.stopPrank();
-        _;
-    }
-
     function testCanDepositCollateralAndGetAccountInfo() public depositCollateral {
         (uint256 totalDscMinted, uint256 collateralValueInUsd) = engine.getAccountInformation(USER);
         uint256 expectedTotalDscMinted = 0;
@@ -98,4 +119,103 @@ contract DeployDSCEngine is Test {
     }
 
     // Challenge: get DSCEngine coverage up to 85%
+
+    /*===============================================
+                     Health Factor         
+    ===============================================*/
+    function testHealthFactorWithNoCollateralDepositedShouldBeZero() public {
+        vm.startPrank(USER);
+        uint256 healthFactor = engine.getHealthFactor(USER);
+        assertEq(healthFactor, 0);
+        vm.stopPrank();
+    }
+
+    /*===============================================
+                     Mint DSC          
+    ===============================================*/
+    function testMintDscRevertIfHealthFactorBroken() public {
+        uint256 expectedHealthFactor = 0;
+
+        vm.startPrank(USER);
+        vm.expectRevert(abi.encodeWithSelector(DSCEngine.DSCEngine__BreaksHealthFactor.selector, expectedHealthFactor));
+        engine.mintDsc(AMOUNT_COLLATERAL);
+        vm.stopPrank();
+    }
+
+    function testMintDscAfterDepositCollateralSuccess() public depositCollateral {
+        vm.prank(USER);
+        engine.mintDsc(AMOUNT_DSC_MINTED);
+        (uint256 totalDscMinted,) = engine.getAccountInformation(USER);
+        assertEq(totalDscMinted, AMOUNT_DSC_MINTED);
+    }
+
+    /*===============================================
+                     Burn DSC          
+    ===============================================*/
+    function testBurnDscRevertIfHealthFactorBroken() public depositCollateral mintDsc {
+        uint256 expectedHealthFactor = 0;
+
+        vm.startPrank(USER);
+        /*
+            Need to approve DSCEngine to spend DSC on behalf of USER
+            from DSC
+        */
+        dsc.approve(address(engine), AMOUNT_DSC_MINTED);
+        vm.expectRevert(abi.encodeWithSelector(DSCEngine.DSCEngine__BreaksHealthFactor.selector, expectedHealthFactor));
+        engine.burnDsc(AMOUNT_DSC_MINTED);
+        vm.stopPrank();
+    }
+
+    function testBurnDscIsSuccessful() public depositCollateral mintDsc {
+        uint256 expectedDscAmount = 1;
+        uint256 dscToBurn = 1;
+
+        vm.startPrank(USER);
+        /*
+            Need to approve DSCEngine to spend DSC on behalf of USER
+            from DSC
+        */
+        dsc.approve(address(engine), dscToBurn);
+        engine.burnDsc(dscToBurn);
+        vm.stopPrank();
+
+        (uint256 totalDscMinted,) = engine.getAccountInformation(USER);
+        assertEq(totalDscMinted, expectedDscAmount);
+    }
+
+    /*===============================================
+                    Redeem Collateral          
+    ===============================================*/
+    function testRedeemCollateralRevertIfZero() public {
+        vm.startPrank(USER);
+        vm.expectRevert(DSCEngine.DSCEngine__MustBeMoreThanZero.selector);
+        engine.redeemCollateral(weth, 0);
+        vm.stopPrank();
+    }
+
+    function testRedeemCollateralBreakHealthFactor() public depositCollateral mintDsc {
+        uint256 expectedHealthFactor = 0;
+        vm.prank(USER);
+        vm.expectRevert(abi.encodeWithSelector(DSCEngine.DSCEngine__BreaksHealthFactor.selector, expectedHealthFactor));
+        engine.redeemCollateral(weth, AMOUNT_COLLATERAL);
+    }
+
+    function testRedeemCollateralIsASuccess() public depositCollateral mintDsc burnDsc {
+        vm.prank(USER);
+        engine.redeemCollateral(weth, AMOUNT_REDEEMED_COLLATERAL);
+
+        (, uint256 collateralValueInUsd) = engine.getAccountInformation(USER);
+        uint256 expectedDepositAmount = engine.getTokenAmountFromUsd(weth, collateralValueInUsd);
+        assertEq(AMOUNT_COLLATERAL - AMOUNT_REDEEMED_COLLATERAL, expectedDepositAmount);
+    }
+
+    /*===============================================
+                     Liquidate          
+    ===============================================*/
+    function testLiquidateRevertIfAtStartHealthFactorIsOk() public depositCollateral mintDsc {
+        vm.startPrank(USER);
+        vm.expectRevert(DSCEngine.DSCEngine__HealthFactorOk.selector);
+        engine.liquidate(weth, USER, AMOUNT_COLLATERAL);
+        vm.stopPrank();
+    }
 }
