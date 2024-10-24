@@ -8,6 +8,10 @@ import {DSCEngine} from "src/DSCEngine.sol";
 import {HelperConfig} from "script/HelperConfig.s.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
 import {MockV3Aggregator} from "test/mocks/MockV3Aggregator.sol";
+import {MockERC20FailingTransfer} from "test/mocks/MockERC20FailingTransfer.sol";
+import {MockERC20FailingTransferFrom} from "test/mocks/MockERC20FailingTransferFrom.sol";
+import {MockDSCFailingMint} from "test/mocks/MockDSCFailingMint.sol";
+import {MockDSCFailingTransferFrom} from "test/mocks/MockDSCFailingTransferFrom.sol";
 
 contract DeployDSCEngine is Test {
     DeployDSC deployer;
@@ -17,6 +21,8 @@ contract DeployDSCEngine is Test {
     address weth;
     address ethUsdPriceFeed;
     address btcUsdPriceFeed;
+    address[] tokenAddresses;
+    address[] priceFeedAddresses;
 
     address public USER = makeAddr("USER");
     address public LIQUIDATOR = makeAddr("LIQUIDATOR");
@@ -65,11 +71,9 @@ contract DeployDSCEngine is Test {
     /*===============================================
                     Constructor test          
     ===============================================*/
-    address[] public tokenAddresses;
-    address[] public priceFeedAddresses;
 
     function testRevertIfTokenLengthDoesntMatchPriceFeeds() public {
-        tokenAddresses.push(ethUsdPriceFeed);
+        tokenAddresses.push(weth);
         priceFeedAddresses.push(ethUsdPriceFeed);
         priceFeedAddresses.push(btcUsdPriceFeed);
 
@@ -122,6 +126,25 @@ contract DeployDSCEngine is Test {
         assertEq(AMOUNT_COLLATERAL, expectedDepositAmount);
     }
 
+    function testDepositCollateralRevertOnFailedTransfer() public {
+        // Deploy the failing mock token
+        MockERC20FailingTransferFrom mockFailingToken =
+            new MockERC20FailingTransferFrom("WETH", "WETH", msg.sender, 1000e8);
+        tokenAddresses.push(address(mockFailingToken));
+        priceFeedAddresses.push(ethUsdPriceFeed);
+        DSCEngine failedEngine = new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
+        ERC20Mock(address(mockFailingToken)).mint(USER, STARTING_ERC20_BALANCE);
+
+        vm.startPrank(USER);
+        // Approve the DSCEngine to transfer tokens on behalf of the user
+        mockFailingToken.approve(address(failedEngine), AMOUNT_COLLATERAL);
+        // Expect the DSCEngine to revert with TransferFailed error
+        vm.expectRevert(DSCEngine.DSCEngine__TransferFailed.selector);
+        // Try depositing collateral with the failing token
+        failedEngine.depositCollateral(address(mockFailingToken), AMOUNT_COLLATERAL);
+        vm.stopPrank();
+    }
+
     // Challenge: get DSCEngine coverage up to 85%
 
     /*===============================================
@@ -153,6 +176,25 @@ contract DeployDSCEngine is Test {
         assertEq(totalDscMinted, AMOUNT_DSC_MINTED);
     }
 
+    function testMintDscRevertsOnMintFailure() public {
+        // Deploy the mock DSC contract with a failing mint function
+        MockDSCFailingMint failingDSC = new MockDSCFailingMint();
+        tokenAddresses.push(weth);
+        priceFeedAddresses.push(ethUsdPriceFeed);
+        // Replace the DSC contract in the DSCEngine with the failing mock
+        DSCEngine failedEngine = new DSCEngine(tokenAddresses, priceFeedAddresses, address(failingDSC)); // Use mock DSC
+        // Change ownership as the deployer script does
+        failingDSC.transferOwnership(address(failedEngine));
+
+        vm.startPrank(USER);
+        ERC20Mock(weth).approve(address(failedEngine), AMOUNT_COLLATERAL);
+        failedEngine.depositCollateral(weth, AMOUNT_COLLATERAL);
+        // Attempt to mint DSC and expect the DSCEngine to revert with MintFailed error
+        vm.expectRevert(DSCEngine.DSCEngine__MintFailed.selector);
+        failedEngine.mintDsc(AMOUNT_DSC_MINTED);
+        vm.stopPrank();
+    }
+
     /*===============================================
                      Burn DSC          
     ===============================================*/
@@ -171,6 +213,27 @@ contract DeployDSCEngine is Test {
 
         (uint256 totalDscMinted,) = engine.getAccountInformation(USER);
         assertEq(totalDscMinted, expectedDscAmount);
+    }
+
+    function testBurnDscRevertsOnTransferFromFailure() public {
+        // Deploy the mock DSC contract with a failing mint function
+        MockDSCFailingTransferFrom failingDSC = new MockDSCFailingTransferFrom();
+        tokenAddresses.push(weth);
+        priceFeedAddresses.push(ethUsdPriceFeed);
+        // Replace the DSC contract in the DSCEngine with the failing mock
+        DSCEngine failedEngine = new DSCEngine(tokenAddresses, priceFeedAddresses, address(failingDSC)); // Use mock DSC
+        // Change ownership as the deployer script does
+        failingDSC.transferOwnership(address(failedEngine));
+
+        vm.startPrank(USER);
+        ERC20Mock(weth).approve(address(failedEngine), AMOUNT_COLLATERAL);
+        failedEngine.depositCollateral(weth, AMOUNT_COLLATERAL);
+        failedEngine.mintDsc(AMOUNT_DSC_MINTED);
+
+        // Attempt to burn DSC and expect the DSCEngine to revert with Tranfer failed error
+        vm.expectRevert(DSCEngine.DSCEngine__TransferFailed.selector);
+        failedEngine.burnDsc(AMOUNT_DSC_TO_BURN);
+        vm.stopPrank();
     }
 
     /*===============================================
@@ -197,6 +260,29 @@ contract DeployDSCEngine is Test {
         (, uint256 collateralValueInUsd) = engine.getAccountInformation(USER);
         uint256 expectedDepositAmount = engine.getTokenAmountFromUsd(weth, collateralValueInUsd);
         assertEq(AMOUNT_COLLATERAL - AMOUNT_REDEEMED_COLLATERAL, expectedDepositAmount);
+    }
+
+    function testRedeemCollateralRevertOnFailedTransfer() public {
+        // Deploy the failing mock token
+        MockERC20FailingTransfer mockFailingToken = new MockERC20FailingTransfer("WETH", "WETH", msg.sender, 1000e8);
+        tokenAddresses.push(address(mockFailingToken));
+        priceFeedAddresses.push(ethUsdPriceFeed);
+        DSCEngine failedEngine = new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
+        // Change ownership as the deployer script does
+        vm.prank(address(engine));
+        dsc.transferOwnership(address(failedEngine));
+        ERC20Mock(address(mockFailingToken)).mint(USER, STARTING_ERC20_BALANCE);
+
+        vm.startPrank(USER);
+        // Approve the DSCEngine to transfer tokens on behalf of the user
+        mockFailingToken.approve(address(failedEngine), AMOUNT_COLLATERAL);
+        // Depositing collateral and minting with the failing token
+        failedEngine.depositCollateral(address(mockFailingToken), AMOUNT_COLLATERAL);
+        failedEngine.mintDsc(AMOUNT_DSC_MINTED);
+        // Expect the DSCEngine to revert with TransferFailed error
+        vm.expectRevert(DSCEngine.DSCEngine__TransferFailed.selector);
+        failedEngine.redeemCollateral(address(mockFailingToken), AMOUNT_REDEEMED_COLLATERAL);
+        vm.stopPrank();
     }
 
     /*===============================================
@@ -238,6 +324,26 @@ contract DeployDSCEngine is Test {
             liquidatedCollateral
                 + (liquidatedCollateral * engine.getLiquidationBonus()) / engine.getLiquidationPrecision()
         );
+    }
+
+    function testLiquidationDoesNotImproveHealthFactor() public depositCollateral mintDsc {
+        // Init Liquidator
+        vm.startPrank(LIQUIDATOR);
+        ERC20Mock(weth).approve(address(engine), AMOUNT_COLLATERAL);
+        engine.depositCollateralAndMintDsc(weth, AMOUNT_COLLATERAL, AMOUNT_DSC_MINTED);
+        vm.stopPrank();
+        // Deploy and set up mock aggregator with an initial price
+        MockV3Aggregator mockAggregator = MockV3Aggregator(ethUsdPriceFeed); // 200 * 10^8
+        mockAggregator.updateAnswer(10e8);
+        // Price of the collateral drops, decreasing the health factor
+        uint256 debtToCover = 10 ether;
+
+        // Now LIQUIDATOR attempts to liquidate USER
+        vm.startPrank(LIQUIDATOR);
+        dsc.approve(address(engine), debtToCover);
+        vm.expectRevert(DSCEngine.DSCEngine__HealthFactorNotImproved.selector);
+        engine.liquidate(weth, USER, debtToCover);
+        vm.stopPrank();
     }
 
     /*===============================================
