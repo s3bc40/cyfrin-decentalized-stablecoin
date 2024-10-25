@@ -5,7 +5,7 @@
 // // 1. The total supply of DSC should be less than the total value of collateral
 // // 2. Getter view functions should never revert
 
-// pragma solidity ^0.8.18;
+pragma solidity ^0.8.18;
 
 // import {Test} from "forge-std/Test.sol";
 // import {StdInvariant} from "forge-std/StdInvariant.sol";
