@@ -23,6 +23,7 @@ import {DecentralizedStableCoin} from "./DecentralizedStableCoin.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import {OracleLib} from "src/libraries/OracleLib.sol";
 
 /**
  * @title DSCEngine
@@ -44,6 +45,11 @@ import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/Ag
  * @notice This contract is based on the MakerDAO DSS system
  */
 contract DSCEngine is ReentrancyGuard {
+    /*===============================================
+                    Type Declarations          
+    ===============================================*/
+    using OracleLib for AggregatorV3Interface;
+
     /*===============================================
                      State Variables          
     ===============================================*/

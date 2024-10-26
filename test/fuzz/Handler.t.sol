@@ -32,6 +32,18 @@ contract Handler is Test {
         btcUsdPriceFeed = MockV3Aggregator(dsce.getCollateralTokenPriceFeed(address(wbtc)));
     }
 
+    function depositCollateral(uint256 collateralSeed, uint256 amountCollateral) public {
+        ERC20Mock collateral = _getCollateralFromSeed(collateralSeed);
+        amountCollateral = bound(amountCollateral, 1, MAX_DEPOSIT_SIZE);
+        vm.startPrank(msg.sender);
+        collateral.mint(msg.sender, amountCollateral);
+        collateral.approve(address(dsce), amountCollateral);
+        dsce.depositCollateral(address(collateral), amountCollateral);
+        vm.stopPrank();
+        // double push if same user
+        usersWithCollateralDeposited.push(msg.sender);
+    }
+
     function mintDsc(uint256 amount, uint256 addressSeed) public {
         if (usersWithCollateralDeposited.length == 0) {
             return;
@@ -53,16 +65,20 @@ contract Handler is Test {
         timeMintIsCalled++;
     }
 
-    function depositCollateral(uint256 collateralSeed, uint256 amountCollateral) public {
-        ERC20Mock collateral = _getCollateralFromSeed(collateralSeed);
-        amountCollateral = bound(amountCollateral, 1, MAX_DEPOSIT_SIZE);
-        vm.startPrank(msg.sender);
-        collateral.mint(msg.sender, amountCollateral);
-        collateral.approve(address(dsce), amountCollateral);
-        dsce.depositCollateral(address(collateral), amountCollateral);
+    function burnDsc(uint256 amountDsc, uint256 addressSeed) public {
+        if (usersWithCollateralDeposited.length == 0) {
+            return;
+        }
+        address sender = usersWithCollateralDeposited[addressSeed % usersWithCollateralDeposited.length];
+        // Must burn more than 0
+        amountDsc = bound(amountDsc, 0, dsc.balanceOf(sender));
+        if (amountDsc == 0) {
+            return;
+        }
+        vm.startPrank(sender);
+        dsc.approve(address(dsce), amountDsc);
+        dsce.burnDsc(amountDsc);
         vm.stopPrank();
-        // double push if same user
-        usersWithCollateralDeposited.push(msg.sender);
     }
 
     function redeemCollateral(uint256 collateralSeed, uint256 amountCollateral) public {
