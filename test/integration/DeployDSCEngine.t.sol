@@ -152,8 +152,9 @@ contract DeployDSCEngine is Test {
     ===============================================*/
     function testHealthFactorWithNoDscMinted() public depositCollateral {
         vm.startPrank(USER);
-        uint256 healthFactor = engine.getHealthFactor(USER);
-        assertEq(healthFactor, engine.getMinHealthFactor());
+        (uint256 totalDscMinted, uint256 collateralValueInUsd) = engine.getAccountInformation(USER);
+        uint256 healthFactor = engine.getHealthFactor(totalDscMinted, collateralValueInUsd);
+        assertEq(healthFactor, type(uint256).max);
         vm.stopPrank();
     }
 
